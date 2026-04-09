@@ -1,0 +1,49 @@
+{
+  "entities": {
+    "DeliveryNote": {
+      "title": "Delivery Note",
+      "description": "A delivery note generated from a purchase order.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "deliveryNumber": { "type": "string" },
+        "purchaseOrderNumber": { "type": "string" },
+        "shipTo": { "type": "string" },
+        "poDate": { "type": "string" },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "qty": { "type": "number" },
+              "itemCode": { "type": "string" },
+              "itemDescription": { "type": "string" }
+            }
+          }
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "createdBy": { "type": "string" }
+      },
+      "required": ["deliveryNumber", "purchaseOrderNumber", "shipTo", "poDate", "items", "createdAt", "createdBy"]
+    },
+    "MonthlyCounter": {
+      "title": "Monthly Counter",
+      "description": "Tracks the number of delivery notes generated in a specific month.",
+      "type": "object",
+      "properties": {
+        "count": { "type": "number" }
+      },
+      "required": ["count"]
+    }
+  },
+  "firestore": {
+    "/deliveryNotes/{noteId}": {
+      "schema": "DeliveryNote",
+      "description": "Collection of generated delivery notes."
+    },
+    "/counters/{monthId}": {
+      "schema": "MonthlyCounter",
+      "description": "Counters for each month (monthId format: YYYY-MM)."
+    }
+  }
+}

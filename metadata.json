@@ -1,0 +1,5 @@
+{
+  "name": "Jes'Camp Delivery Note Generator",
+  "description": "Automatically generate delivery notes from purchase orders with intelligent data extraction and unique numbering.",
+  "requestFramePermissions": []
+}

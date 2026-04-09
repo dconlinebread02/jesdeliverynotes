@@ -1,0 +1,61 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: deliveryNotes
+    // Fields:
+    //   - deliveryNumber: string (required)
+    //   - purchaseOrderNumber: string (required)
+    //   - shipTo: string (required)
+    //   - poDate: string (required)
+    //   - items: list (required)
+    //   - createdAt: timestamp (required)
+    //   - createdBy: string (required)
+    //
+    // Collection: counters
+    // Fields:
+    //   - count: number (required)
+    //
+    // ===============================================================
+
+    // Helper Functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && 
+        (request.auth.token.email == "dconlinebread01@gmail.com");
+    }
+
+    function isValidDeliveryNote(data) {
+      return data.keys().hasAll(['deliveryNumber', 'purchaseOrderNumber', 'shipTo', 'poDate', 'items', 'createdAt', 'createdBy']) &&
+             data.deliveryNumber is string && data.deliveryNumber.size() > 0 &&
+             data.purchaseOrderNumber is string && data.purchaseOrderNumber.size() > 0 &&
+             data.shipTo is string && data.shipTo.size() > 0 &&
+             data.poDate is string && data.poDate.size() > 0 &&
+             data.items is list &&
+             data.createdAt is timestamp &&
+             data.createdBy == request.auth.uid;
+    }
+
+    function isValidCounter(data) {
+      return data.keys().hasAll(['count']) && data.count is number && data.count >= 0;
+    }
+
+    match /deliveryNotes/{noteId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidDeliveryNote(request.resource.data);
+      allow update, delete: if isAdmin();
+    }
+
+    match /counters/{monthId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated() && isValidCounter(request.resource.data);
+      allow delete: if isAdmin();
+    }
+  }
+}
