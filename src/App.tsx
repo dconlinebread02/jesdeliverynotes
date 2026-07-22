@@ -34,7 +34,8 @@ import {
   serverTimestamp, 
   Timestamp,
   runTransaction,
-  deleteDoc
+  deleteDoc,
+  updateDoc
 } from 'firebase/firestore';
 import { 
   FileText, 
@@ -51,12 +52,17 @@ import {
   ChevronRight,
   Trash2,
   Edit3,
-  Check
+  Check,
+  Sliders,
+  Sparkles,
+  Palette,
+  Eye
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { format } from 'date-fns';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
+import FloatingLines from './components/FloatingLines';
 
 // --- Types ---
 interface POItem {
@@ -95,28 +101,37 @@ const PURPLE_PRIMARY = "#6B21A8"; // purple-800
 const ORANGE_PRIMARY = "#F97316"; // orange-500
 const BG_DARK = "#111827"; // gray-900
 
+const SILK_THEMES = [
+  { name: 'Royal Velvet', color: '#A855F7', accent: '#6366F1', glow: 'bg-purple-600', text: 'text-purple-400', border: 'border-purple-500/30' },
+  { name: 'Sunset Silk', color: '#F97316', accent: '#EF4444', glow: 'bg-orange-600', text: 'text-orange-400', border: 'border-orange-500/30' },
+  { name: 'Midnight Satin', color: '#3B82F6', accent: '#1D4ED8', glow: 'bg-blue-600', text: 'text-blue-400', border: 'border-blue-500/30' },
+  { name: 'Emerald Drapery', color: '#10B981', accent: '#059669', glow: 'bg-emerald-600', text: 'text-emerald-400', border: 'border-emerald-500/30' },
+  { name: 'Rose Cashmere', color: '#EC4899', accent: '#BE185D', glow: 'bg-pink-600', text: 'text-pink-400', border: 'border-pink-500/30' },
+  { name: 'Gold Damask', color: '#F59E0B', accent: '#D97706', glow: 'bg-amber-600', text: 'text-amber-400', border: 'border-amber-500/30' }
+];
+
 // --- Gemini Setup ---
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
 
 const PO_EXTRACTION_SCHEMA = {
   type: Type.OBJECT,
   properties: {
-    purchaseOrderNumber: { type: Type.STRING, description: "The purchase order number, usually starts with 'P'." },
+    purchaseOrderNumber: { type: Type.STRING, description: "The purchase order number." },
     shipTo: { type: Type.STRING, description: "The Ship To detail/address." },
-    poDate: { type: Type.STRING, description: "The P.O. Date." },
-    totalAmount: { type: Type.NUMBER, description: "The total amount of the purchase order if listed." },
+    poDate: { type: Type.STRING, description: "The P.O. Date (e.g., DD/MM/YYYY)." },
+    totalAmount: { type: Type.NUMBER, description: "The total amount of the purchase order." },
     items: {
       type: Type.ARRAY,
       items: {
         type: Type.OBJECT,
         properties: {
-          qty: { type: Type.NUMBER, description: "Quantity of the item." },
-          itemCode: { type: Type.STRING, description: "The item code." },
-          itemDescription: { type: Type.STRING, description: "The description of the item." },
-          unitPrice: { type: Type.NUMBER, description: "The unit price of the item if listed." },
-          totalPrice: { type: Type.NUMBER, description: "The total price for this item line if listed." }
+          qty: { type: Type.NUMBER, description: "Quantity." },
+          itemCode: { type: Type.STRING, description: "Item code or SKU." },
+          itemDescription: { type: Type.STRING, description: "Description of the item." },
+          unitPrice: { type: Type.NUMBER, description: "Unit price." },
+          totalPrice: { type: Type.NUMBER, description: "Total price for this line." }
         },
-        required: ["qty", "itemCode", "itemDescription"]
+        required: ["qty", "itemDescription"]
       }
     }
   },
@@ -139,6 +154,16 @@ export default function App() {
   const noteRef = useRef<HTMLDivElement>(null);
   const previewContainerRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
+
+  // Background Waves states
+  const [themeIndex, setThemeIndex] = useState(0);
+  const [silkSpeed, setSilkSpeed] = useState(1.2);
+  const [silkScale, setSilkScale] = useState(6.0); // bendRadius
+  const [silkIntensity, setSilkIntensity] = useState(-3.5); // bendStrength
+  const [silkLineCount, setSilkLineCount] = useState(12); // lineCount
+  const [showSilkControls, setShowSilkControls] = useState(false);
+
+  const isAdmin = user?.email === "dconlinebread01@gmail.com";
 
   useEffect(() => {
     const handleResize = () => {
@@ -173,6 +198,52 @@ export default function App() {
     return unsubscribe;
   }, [user]);
 
+  useEffect(() => {
+    if (!user || history.length === 0 || !isAdmin) return;
+
+    const migrate = async () => {
+      console.log("[Migration] Checking for notes to migrate...");
+      let migrationCount = 0;
+      for (const note of history) {
+        // Flexible regex for old format
+        const oldMatch = note.deliveryNumber.match(/JES\s*(\d+)\.(\d+)/i);
+        if (oldMatch && note.id) {
+          const m = parseInt(oldMatch[1]);
+          const n = parseInt(oldMatch[2]);
+          const newNum = formatDeliveryNumber(m, n);
+          
+          // Only update if it's actually different (e.g. JES 4.2 -> JES 0402)
+          if (note.deliveryNumber !== newNum) {
+            console.log(`[Migration] Migrating note ${note.id} from ${note.deliveryNumber} to ${newNum}`);
+            try {
+              await updateDoc(doc(db, "deliveryNotes", note.id), {
+                deliveryNumber: newNum
+              });
+              migrationCount++;
+            } catch (err) {
+              console.error("[Migration] Error for note", note.id, err);
+            }
+          }
+        }
+      }
+      if (migrationCount > 0) {
+        console.log(`[Migration] Successfully migrated ${migrationCount} notes.`);
+      }
+    };
+
+    migrate();
+  }, [user, history.length, isAdmin]); // Run when history length or admin status changes
+
+  // Keep viewingNote in sync with history (important for migration updates)
+  useEffect(() => {
+    if (viewingNote && history.length > 0) {
+      const updatedNote = history.find(n => n.id === viewingNote.id);
+      if (updatedNote && updatedNote.deliveryNumber !== viewingNote.deliveryNumber) {
+        setViewingNote(updatedNote);
+      }
+    }
+  }, [history, viewingNote]);
+
   const handleLogin = async () => {
     try {
       const provider = new GoogleAuthProvider();
@@ -185,35 +256,68 @@ export default function App() {
 
   const handleLogout = () => signOut(auth);
 
+  const formatDeliveryNumber = (month: number, count: number) => {
+    const mm = month.toString().padStart(2, '0');
+    const nn = count.toString().padStart(2, '0');
+    return `JES ${mm}${nn}`;
+  };
+
+  const displayDeliveryNumber = (num?: string) => {
+    if (!num) return "";
+    const oldMatch = num.match(/JES\s*(\d+)\.(\d+)/i);
+    if (oldMatch) {
+      const m = parseInt(oldMatch[1]);
+      const n = parseInt(oldMatch[2]);
+      return formatDeliveryNumber(m, n);
+    }
+    return num;
+  };
+
   const getNextDeliveryNumber = async () => {
     const now = new Date();
     const month = now.getMonth() + 1; // 1-indexed
-    const prefix = `JES ${month}.`;
+    
+    console.log(`[Numbering] Generating next number for month: ${month}`);
 
     try {
       const q = query(
         collection(db, "deliveryNotes"),
-        where("deliveryNumber", ">=", prefix),
-        where("deliveryNumber", "<=", prefix + "\uf8ff")
+        where("deliveryNumber", ">=", "JES"),
+        where("deliveryNumber", "<=", "JES\uf8ff")
       );
       const snapshot = await getDocs(q);
       
       let maxCount = 0;
       snapshot.forEach(doc => {
         const data = doc.data();
-        const numStr = data.deliveryNumber as string;
-        if (numStr.startsWith(prefix)) {
-          const countPart = parseInt(numStr.split('.')[1]);
-          if (!isNaN(countPart) && countPart > maxCount) {
-            maxCount = countPart;
+        const numStr = (data.deliveryNumber as string).trim();
+        
+        // Parse both old (JES M.N or JESM.N) and new (JES MMNN or JESMMNN) formats
+        // Using more flexible regex to handle potential missing spaces
+        const oldMatch = numStr.match(/JES\s*(\d+)\.(\d+)/i);
+        const newMatch = numStr.match(/JES\s*(\d{2})(\d{2})/i);
+        
+        if (oldMatch) {
+          const m = parseInt(oldMatch[1]);
+          const n = parseInt(oldMatch[2]);
+          if (m === month) {
+            if (n > maxCount) maxCount = n;
+          }
+        } else if (newMatch) {
+          const m = parseInt(newMatch[1]);
+          const n = parseInt(newMatch[2]);
+          if (m === month) {
+            if (n > maxCount) maxCount = n;
           }
         }
       });
 
-      return `${prefix}${maxCount + 1}`;
+      const nextNum = formatDeliveryNumber(month, maxCount + 1);
+      console.log(`[Numbering] Next delivery number: ${nextNum}`);
+      return nextNum;
     } catch (err) {
-      console.error("Counter Error:", err);
-      return `${prefix}1`;
+      console.error("[Numbering] Counter Error:", err);
+      return formatDeliveryNumber(month, 1);
     }
   };
 
@@ -234,27 +338,51 @@ export default function App() {
     setExtracting(true);
     setError(null);
     try {
-      let parts: any[] = [];
-      
+      if (!process.env.GEMINI_API_KEY) {
+        throw new Error("Gemini API key is not configured. Please check your settings.");
+      }
+
+      console.log(`[Extraction] Starting extraction for file: ${selectedFile.name} (${selectedFile.type})`);
       const base64 = await fileToBase64(selectedFile);
-      parts.push({
-        inlineData: {
-          data: base64,
-          mimeType: selectedFile.type
-        }
-      });
-      parts.push({ text: "Extract the following data from this Purchase Order document: PO Number (starts with P), Ship To, PO Date, and a list of items (qty, code, description)." });
+      
+      const mimeType = selectedFile.type || (selectedFile.name.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/jpeg');
 
       const response: GenerateContentResponse = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: { parts },
+        model: "gemini-3.1-flash-lite-preview", // Switching to Flash Lite which has higher free-tier quotas (2,000/day vs 20/day)
+        contents: { 
+          parts: [
+            {
+              inlineData: {
+                data: base64,
+                mimeType: mimeType
+              }
+            },
+            { text: "Extract the following data from this Purchase Order document: PO Number (starts with P), Ship To, PO Date, and a list of items (qty, code, description). Return the data in strict JSON format according to the provided schema." }
+          ] 
+        },
         config: {
           responseMimeType: "application/json",
           responseSchema: PO_EXTRACTION_SCHEMA,
         },
       });
 
-      const data = JSON.parse(response.text || "{}");
+      const text = response.text;
+      if (!text) {
+        throw new Error("AI returned an empty response. The document might be unreadable or too complex.");
+      }
+
+      console.log("[Extraction] AI Response received");
+      
+      // Clean JSON in case the model wraps it in markdown backticks despite the config
+      const cleanedJson = text.replace(/```json\n?|```/g, "").trim();
+      let data;
+      try {
+        data = JSON.parse(cleanedJson);
+      } catch (parseErr) {
+        console.error("[Extraction] JSON Parse Error:", parseErr, "Raw text:", text);
+        throw new Error("Failed to parse the AI response. Please try again.");
+      }
+
       const deliveryNumber = await getNextDeliveryNumber();
 
       // Ensure totals are calculated if Gemini missed them
@@ -277,12 +405,39 @@ export default function App() {
         createdAt: Timestamp.now(),
         createdBy: user?.uid || "anonymous"
       });
-    } catch (err) {
-      console.error("Extraction Error:", err);
-      setError("Failed to extract data. Please check the PO and try again.");
+      console.log("[Extraction] Extraction successful");
+    } catch (err: any) {
+      console.error("[Extraction] Error:", err);
+      let errorMessage = "Failed to extract data. Please check the PO and try again.";
+      
+      const rawError = err.message || String(err);
+      
+      if (rawError.includes("RESOURCE_EXHAUSTED") || rawError.includes("429")) {
+        errorMessage = "AI Quota Exceeded. You've reached the daily limit for automatic extraction. Please try again tomorrow or use the 'Manual Entry' option below.";
+      } else if (rawError.includes("quota")) {
+        errorMessage = "Daily extraction limit reached. Please wait or use manual entry.";
+      }
+      
+      setError(errorMessage);
     } finally {
       setExtracting(false);
     }
+  };
+
+  const startManualEntry = async () => {
+    setError(null);
+    const deliveryNumber = await getNextDeliveryNumber();
+    setCurrentNote({
+      purchaseOrderNumber: "",
+      shipTo: "",
+      poDate: format(new Date(), 'dd/MM/yyyy'),
+      items: [{ qty: 1, itemCode: "", itemDescription: "", unitPrice: 0, totalPrice: 0 }],
+      totalAmount: 0,
+      deliveryNumber,
+      createdAt: Timestamp.now(),
+      createdBy: user?.uid || "anonymous"
+    });
+    setIsEditing(true); // Allow immediate editing for manual entry
   };
 
   const saveNote = async () => {
@@ -350,7 +505,8 @@ export default function App() {
     const imgData = canvas.toDataURL('image/png');
     const pdf = new jsPDF('p', 'mm', 'a4');
     pdf.addImage(imgData, 'PNG', 0, 0, 210, 297);
-    pdf.save(`Delivery_Note_${viewingNote?.deliveryNumber || currentNote?.deliveryNumber}.pdf`);
+    const fileNameNum = displayDeliveryNumber(viewingNote?.deliveryNumber || currentNote?.deliveryNumber);
+    pdf.save(`Delivery_Note_${fileNameNum}.pdf`);
   };
 
   const deleteNote = async (id: string) => {
@@ -364,8 +520,6 @@ export default function App() {
       setDeletingId(null);
     }
   };
-
-  const isAdmin = user?.email === "dconlinebread01@gmail.com";
 
   const updateItem = (idx: number, field: keyof DeliveryNote['items'][0], value: string | number) => {
     const note = currentNote || viewingNote;
@@ -431,9 +585,24 @@ export default function App() {
   if (!user) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-gray-950 p-4 relative overflow-hidden">
+        {/* Background Waves */}
+        <div className="absolute inset-0 z-0 pointer-events-none">
+          <FloatingLines
+            linesGradient={[SILK_THEMES[themeIndex].color, SILK_THEMES[themeIndex].accent]}
+            enabledWaves={['top', 'middle', 'bottom']}
+            lineCount={silkLineCount}
+            lineDistance={6}
+            bendRadius={silkScale}
+            bendStrength={silkIntensity}
+            interactive={true}
+            parallax={true}
+            animationSpeed={silkSpeed}
+          />
+        </div>
+
         {/* Background Accents */}
-        <div className="absolute top-0 left-0 w-full h-full opacity-10 pointer-events-none">
-          <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-purple-600 rounded-full blur-[120px]" />
+        <div className="absolute top-0 left-0 w-full h-full opacity-10 pointer-events-none z-0">
+          <div className={`absolute top-[-10%] left-[-10%] w-[40%] h-[40%] ${SILK_THEMES[themeIndex].glow} rounded-full blur-[120px]`} />
           <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-orange-600 rounded-full blur-[120px]" />
         </div>
 
@@ -460,7 +629,28 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-950 flex flex-col text-gray-100">
+    <div className="min-h-screen bg-gray-950 flex flex-col text-gray-100 relative overflow-hidden">
+      {/* Background Waves */}
+      <div className="absolute inset-0 z-0 pointer-events-none">
+        <FloatingLines
+          linesGradient={[SILK_THEMES[themeIndex].color, SILK_THEMES[themeIndex].accent]}
+          enabledWaves={['top', 'middle', 'bottom']}
+          lineCount={silkLineCount}
+          lineDistance={6}
+          bendRadius={silkScale}
+          bendStrength={silkIntensity}
+          interactive={true}
+          parallax={true}
+          animationSpeed={silkSpeed}
+        />
+      </div>
+
+      {/* Background Accents */}
+      <div className="absolute top-0 left-0 w-full h-full opacity-10 pointer-events-none z-0">
+        <div className={`absolute top-[-10%] left-[-10%] w-[40%] h-[40%] ${SILK_THEMES[themeIndex].glow} rounded-full blur-[120px]`} />
+        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-orange-600 rounded-full blur-[120px]" />
+      </div>
+
       {/* Header */}
       <header className="bg-gray-900/80 backdrop-blur-md border-b border-gray-800 px-8 py-5 flex items-center justify-between sticky top-0 z-50">
         <div className="flex items-center gap-4">
@@ -490,9 +680,199 @@ export default function App() {
         </div>
       </header>
 
-      <main className="flex-1 max-w-7xl mx-auto w-full p-8 grid grid-cols-1 lg:grid-cols-12 gap-10">
-        {/* Left Column: Input & History */}
-        <div className="lg:col-span-5 space-y-8">
+      <main className="flex-1 max-w-7xl mx-auto w-full p-8 flex flex-col gap-8 relative z-10">
+        {/* Modern Bento Stats Bar */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-6">
+          {/* Stat 1 */}
+          <div className="relative bg-gray-900/40 backdrop-blur-md border border-gray-800/80 hover:border-purple-500/30 transition-all duration-300 p-6 rounded-2xl flex items-center gap-4 overflow-hidden group">
+            <div className="p-3.5 bg-purple-500/10 rounded-xl text-purple-400 group-hover:scale-110 transition-transform">
+              <FileText className="w-5 h-5" />
+            </div>
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-wider text-gray-500">Total Notes</p>
+              <p className="text-2xl font-black text-white">{history.length}</p>
+            </div>
+            <div className="absolute -right-6 -bottom-6 w-16 h-16 bg-purple-500/5 rounded-full blur-xl pointer-events-none" />
+          </div>
+
+          {/* Stat 2 */}
+          <div className="relative bg-gray-900/40 backdrop-blur-md border border-gray-800/80 hover:border-orange-500/30 transition-all duration-300 p-6 rounded-2xl flex items-center gap-4 overflow-hidden group">
+            <div className="p-3.5 bg-orange-500/10 rounded-xl text-orange-400 group-hover:scale-110 transition-transform">
+              <CheckCircle2 className="w-5 h-5" />
+            </div>
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-wider text-gray-500">Key Customer</p>
+              <p className="text-lg font-black text-white truncate max-w-[150px]">{CUSTOMER_NAME}</p>
+            </div>
+            <div className="absolute -right-6 -bottom-6 w-16 h-16 bg-orange-500/5 rounded-full blur-xl pointer-events-none" />
+          </div>
+
+          {/* Stat 3 */}
+          <div className="relative bg-gray-900/40 backdrop-blur-md border border-gray-800/80 hover:border-blue-500/30 transition-all duration-300 p-6 rounded-2xl flex items-center gap-4 overflow-hidden group">
+            <div className="p-3.5 bg-blue-500/10 rounded-xl text-blue-400 group-hover:scale-110 transition-transform">
+              <History className="w-5 h-5" />
+            </div>
+            <div className="truncate">
+              <p className="text-[10px] font-black uppercase tracking-wider text-gray-500">Latest Delivery</p>
+              <p className="text-base font-black text-white truncate max-w-[150px]">
+                {history[0] ? displayDeliveryNumber(history[0].deliveryNumber) : "No notes yet"}
+              </p>
+            </div>
+            <div className="absolute -right-6 -bottom-6 w-16 h-16 bg-blue-500/5 rounded-full blur-xl pointer-events-none" />
+          </div>
+
+          {/* Stat 4 */}
+          <div 
+            className="relative bg-gray-900/40 backdrop-blur-md border border-gray-800/80 hover:border-emerald-500/30 transition-all duration-300 p-6 rounded-2xl flex items-center gap-4 overflow-hidden group cursor-pointer"
+            onClick={() => setShowSilkControls(!showSilkControls)}
+          >
+            <div className={`p-3.5 bg-emerald-500/10 rounded-xl ${SILK_THEMES[themeIndex].text} group-hover:scale-110 transition-transform`}>
+              <Palette className="w-5 h-5 animate-pulse" />
+            </div>
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-wider text-gray-500">Ambient Canvas</p>
+              <p className="text-base font-black text-white flex items-center gap-1.5">
+                {SILK_THEMES[themeIndex].name}
+                <span className="inline-block w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+              </p>
+            </div>
+            <div className="absolute -right-6 -bottom-6 w-16 h-16 bg-emerald-500/5 rounded-full blur-xl pointer-events-none" />
+          </div>
+        </div>
+
+        {/* Ambient Canvas Visual Customizer Panel */}
+        <AnimatePresence>
+          {showSilkControls && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: 'auto', opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.3 }}
+              className="overflow-hidden"
+            >
+              <div className="bg-gray-900/60 backdrop-blur-md border border-gray-800/90 rounded-2xl p-6 grid grid-cols-1 md:grid-cols-3 gap-6 relative">
+                {/* Close Button */}
+                <button
+                  onClick={() => setShowSilkControls(false)}
+                  className="absolute top-4 right-4 text-gray-500 hover:text-white font-bold transition-colors text-xs"
+                >
+                  ✕ Close
+                </button>
+
+                {/* Theme Selector */}
+                <div>
+                  <div className="flex items-center gap-2 mb-3">
+                    <Palette className="w-4 h-4 text-purple-400" />
+                    <h3 className="text-xs font-black uppercase tracking-wider text-gray-200">Wave Theme</h3>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    {SILK_THEMES.map((t, idx) => (
+                      <button
+                        key={idx}
+                        onClick={() => setThemeIndex(idx)}
+                        className={`flex flex-col items-center gap-1.5 p-2 rounded-xl border text-[10px] font-bold transition-all ${
+                          themeIndex === idx
+                            ? 'bg-purple-950/40 border-purple-500 text-white shadow-md shadow-purple-900/10'
+                            : 'bg-gray-800/40 border-gray-800 hover:border-gray-700 text-gray-400 hover:text-gray-200'
+                        }`}
+                      >
+                        <div className="w-4 h-4 rounded-full shadow-inner" style={{ backgroundColor: t.color }} />
+                        <span className="truncate w-full text-center">{t.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Sliders (Speed & Scale) */}
+                <div className="space-y-4">
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2 text-xs font-black uppercase tracking-wider text-gray-200">
+                        <Sliders className="w-4 h-4 text-purple-400" />
+                        <span>Flow Speed</span>
+                      </div>
+                      <span className="text-[10px] font-mono text-gray-400">{silkSpeed.toFixed(1)}x</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0.1"
+                      max="4.0"
+                      step="0.1"
+                      value={silkSpeed}
+                      onChange={(e) => setSilkSpeed(parseFloat(e.target.value))}
+                      className="w-full accent-purple-500 bg-gray-800 h-1.5 rounded-lg cursor-pointer"
+                    />
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2 text-xs font-black uppercase tracking-wider text-gray-200">
+                        <Sliders className="w-4 h-4 text-purple-400" />
+                        <span>Bend Radius</span>
+                      </div>
+                      <span className="text-[10px] font-mono text-gray-400">{silkScale.toFixed(1)}</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="1.0"
+                      max="20.0"
+                      step="0.5"
+                      value={silkScale}
+                      onChange={(e) => setSilkScale(parseFloat(e.target.value))}
+                      className="w-full accent-purple-500 bg-gray-800 h-1.5 rounded-lg cursor-pointer"
+                    />
+                  </div>
+                </div>
+
+                {/* Advanced (Intensity & Rotation) */}
+                <div className="space-y-4">
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2 text-xs font-black uppercase tracking-wider text-gray-200">
+                        <Sparkles className="w-4 h-4 text-purple-400" />
+                        <span>Bend Strength</span>
+                      </div>
+                      <span className="text-[10px] font-mono text-gray-400">{silkIntensity.toFixed(1)}</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="-10.0"
+                      max="-0.2"
+                      step="0.1"
+                      value={silkIntensity}
+                      onChange={(e) => setSilkIntensity(parseFloat(e.target.value))}
+                      className="w-full accent-purple-500 bg-gray-800 h-1.5 rounded-lg cursor-pointer"
+                    />
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2 text-xs font-black uppercase tracking-wider text-gray-200">
+                        <Sliders className="w-4 h-4 text-purple-400" />
+                        <span>Wave Density</span>
+                      </div>
+                      <span className="text-[10px] font-mono text-gray-400">{silkLineCount} lines</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="2"
+                      max="30"
+                      step="1"
+                      value={silkLineCount}
+                      onChange={(e) => setSilkLineCount(parseInt(e.target.value))}
+                      className="w-full accent-purple-500 bg-gray-800 h-1.5 rounded-lg cursor-pointer"
+                    />
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Core Layout Grid */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-10">
+          {/* Left Column: Input & History */}
+          <div className="lg:col-span-5 space-y-8">
           {/* Input Section */}
           <section className="bg-gray-900/50 backdrop-blur-sm rounded-3xl shadow-xl border border-gray-800 p-8">
             <div className="flex items-center gap-3 mb-6">
@@ -558,9 +938,20 @@ export default function App() {
               )}
             </button>
             {error && (
-              <div className="mt-6 p-4 bg-red-900/20 border border-red-900/50 text-red-400 rounded-xl flex items-center gap-3 text-sm font-medium">
-                <AlertCircle className="w-5 h-5 flex-shrink-0" />
-                {error}
+              <div className="mt-6 flex flex-col gap-4">
+                <div className="p-4 bg-red-900/20 border border-red-900/50 text-red-400 rounded-xl flex items-center gap-3 text-sm font-medium">
+                  <AlertCircle className="w-5 h-5 flex-shrink-0" />
+                  <span>{error}</span>
+                </div>
+                {error.includes("Quota") && (
+                  <button
+                    onClick={startManualEntry}
+                    className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-gray-800 hover:bg-gray-700 text-gray-200 font-bold rounded-xl transition-all border border-gray-700 text-xs uppercase tracking-widest"
+                  >
+                    <Plus className="w-4 h-4" />
+                    Fill Manually Instead
+                  </button>
+                )}
               </div>
             )}
           </section>
@@ -599,7 +990,7 @@ export default function App() {
                         className="flex-1 text-left"
                       >
                         <p className="font-black text-white group-hover:text-purple-400 transition-colors text-lg tracking-tight">
-                          {note.deliveryNumber}
+                          {displayDeliveryNumber(note.deliveryNumber)}
                         </p>
                         <div className="flex flex-col gap-1 mt-2">
                           <div className="flex items-center gap-3">
@@ -771,7 +1162,7 @@ export default function App() {
                           <div className="flex flex-col items-center">
                             <span className="text-[8px] font-black uppercase tracking-[0.1em]" style={{ color: '#9ca3af' }}>Number</span>
                             <span className="text-base font-black tracking-tighter" style={{ color: '#4c1d95' }}>
-                              {(viewingNote || currentNote)?.deliveryNumber}
+                              {displayDeliveryNumber((viewingNote || currentNote)?.deliveryNumber)}
                             </span>
                           </div>
                           <div className="w-px h-6 bg-gray-200"></div>
@@ -988,7 +1379,8 @@ export default function App() {
             )}
           </AnimatePresence>
         </div>
-      </main>
-    </div>
-  );
+      </div>
+    </main>
+  </div>
+);
 }
