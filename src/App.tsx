@@ -1307,19 +1307,6 @@ export default function App() {
                       </table>
                     </div>
 
-                    {/* Grand Total Section */}
-                    {/* Hidden on printed document as requested, but kept in data for history */}
-                    <div className="mt-2 flex justify-end relative z-10 no-print">
-                      <div className="w-64 p-2 rounded-xl border-2" style={{ borderColor: '#4c1d95', backgroundColor: 'rgba(245, 243, 255, 0.3)' }}>
-                        <div className="flex justify-between items-center">
-                          <span className="text-[9px] font-display font-black uppercase tracking-widest" style={{ color: '#4c1d95' }}>Grand Total (Reference)</span>
-                          <span className="text-[12px] font-black" style={{ color: '#111827' }}>
-                            KES {(viewingNote || currentNote)?.totalAmount?.toLocaleString() || '0.00'}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-
 
                     {/* Signatures & Footer */}
                     <div className="mt-4 pt-4 border-t-2 relative z-10" style={{ borderTopColor: '#f3f4f6' }}>
